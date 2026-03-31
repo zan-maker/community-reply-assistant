@@ -1,0 +1,25 @@
+services:
+  community-reply:
+    build: .
+    container_name: community-reply-assistant
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - app-data:/app/data
+      - app-env:/app/.env.local
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:/app/data/community-reply.db
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  app-data:
+    driver: local
+  app-env:
+    driver: local
