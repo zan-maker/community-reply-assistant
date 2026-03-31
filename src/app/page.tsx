@@ -282,8 +282,8 @@ export default function Home() {
               <Search className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gray-900">Reddit Marketing System</h1>
-              <p className="text-xs text-gray-500 hidden sm:block">Monitor, score, and engage with buyer intent</p>
+              <h1 className="text-lg font-bold text-gray-900">Community Reply Assistant</h1>
+              <p className="text-xs text-gray-500 hidden sm:block">Helping experts give helpful answers on Reddit</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -673,7 +673,7 @@ export default function Home() {
                     <li>Go to <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener noreferrer" className="text-amber-600 underline">https://www.reddit.com/prefs/apps</a> and log in</li>
                     <li>Scroll to the bottom and click <strong>&ldquo;create another app&rdquo;</strong></li>
                     <li>Select <strong>&ldquo;script&rdquo;</strong> as the app type</li>
-                    <li>Fill in a name (e.g. &ldquo;Reddit Marketing System&rdquo;) and description</li>
+                    <li>Fill in a name (e.g. &ldquo;Community Reply Assistant&rdquo;) and description</li>
                     <li>Set <strong>redirect URI</strong> to <code className="bg-gray-100 px-1 rounded">http://localhost</code></li>
                     <li>Click <strong>&ldquo;create app&rdquo;</strong></li>
                     <li>Copy the <strong>client_id</strong> (shown under the app name) and <strong>client_secret</strong></li>
@@ -719,7 +719,7 @@ export default function Home() {
       {/* FOOTER */}
       <footer className="border-t mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 text-center text-xs text-gray-400">
-          Reddit Marketing System &bull; Monitor, Score, Engage
+          Community Reply Assistant &bull; Free & Open Source
         </div>
       </footer>
     </div>

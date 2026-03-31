@@ -7,8 +7,8 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Reddit Marketing System",
-  description: "Monitor Reddit for buyer intent, score opportunities, and draft engaging replies for your business.",
+  title: "Community Reply Assistant",
+  description: "Free open-source tool that helps experts provide thoughtful, helpful answers to business questions on Reddit. Promotes genuine engagement over self-promotional spam.",
   icons: { icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg" },
 };
 
