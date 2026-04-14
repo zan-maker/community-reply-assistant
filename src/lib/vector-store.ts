@@ -1,19 +1,20 @@
 /**
  * vector-store.ts — Actian VectorAI DB client wrapper
  *
- * Provides a clean abstraction over Actian VectorAI DB for:
- *   - Upserting thread vectors with metadata
- *   - Semantic similarity search with metadata filters
- *   - Hybrid fusion search (vector + engagement scoring)
+ * Communicates with the vectorai-bridge.py Python service which wraps the
+ * Actian VectorAI DB Python client (gRPC) and local embedding model.
+ *
+ * Architecture:
+ *   Next.js (TypeScript)  →  REST HTTP  →  vectorai-bridge.py  →  gRPC  →  VectorAI DB
+ *                                                    ↓
+ *                                          sentence-transformers (embeddings)
  *
  * Setup:
- *   1. Run VectorAI DB: docker compose up vectorai-db
- *   2. Install Python client: pip install actian-vectorai
- *   3. Install embeddings model: pip install sentence-transformers
- *   4. Start embedding server: python src/lib/embedding-server.py
+ *   1. docker compose up vectorai-db    # Start VectorAI DB (gRPC on :50051)
+ *   2. docker compose up vectorai-bridge # Start bridge (REST on :27832)
+ *      Or manually: pip install actian-vectorai sentence-transformers flask flask-cors
+ *                   python vectorai-bridge.py
  */
-
-import type { RedditPost } from './reddit';
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -59,20 +60,23 @@ export interface HybridSearchOptions extends VectorSearchOptions {
 
 // ─── Configuration ──────────────────────────────────────────────────
 
-const VECTORAI_CONFIG = {
-  baseUrl: process.env.VECTORAI_DB_URL || 'http://localhost:27832',
+const BRIDGE_CONFIG = {
+  /**
+   * URL of the vectorai-bridge.py REST service.
+   * This bridge wraps the Actian VectorAI DB gRPC client + embedding model.
+   */
+  bridgeUrl: process.env.VECTORAI_BRIDGE_URL || process.env.EMBEDDING_SERVER_URL || 'http://localhost:27832',
   collectionName: process.env.VECTORAI_COLLECTION || 'reddit_threads',
-  embeddingServerUrl: process.env.EMBEDDING_SERVER_URL || 'http://localhost:11434',
 };
 
-// ─── Embedding via local model ──────────────────────────────────────
+// ─── Embedding via local model (through bridge) ────────────────────
 
 /**
  * Generate embedding vector for text using the local embedding server.
- * The embedding server runs sentence-transformers/all-MiniLM-L6-v2.
+ * The bridge runs sentence-transformers/all-MiniLM-L6-v2 (384-dim).
  */
 export async function embedText(text: string): Promise<number[]> {
-  const response = await fetch(`${VECTORAI_CONFIG.embeddingServerUrl}/api/embed`, {
+  const response = await fetch(`${BRIDGE_CONFIG.bridgeUrl}/api/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
@@ -90,7 +94,7 @@ export async function embedText(text: string): Promise<number[]> {
  * Batch embed multiple texts in one call (faster than one-by-one).
  */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const response = await fetch(`${VECTORAI_CONFIG.embeddingServerUrl}/api/embed-batch`, {
+  const response = await fetch(`${BRIDGE_CONFIG.bridgeUrl}/api/embed-batch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ texts }),
@@ -104,73 +108,74 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   return data.embeddings;
 }
 
-// ─── VectorAI DB Operations ─────────────────────────────────────────
+// ─── VectorAI DB Operations (through bridge REST API) ──────────────
 
 /**
- * Initialize a collection in VectorAI DB with proper schema.
+ * Initialize a collection in VectorAI DB via the bridge.
+ * Uses the actian-vectorai Python client under the hood:
+ *   client.collections.create(name, VectorParams(size=384, distance=Cosine))
  */
 export async function initCollection(): Promise<void> {
-  const response = await fetch(`${VECTORAI_CONFIG.baseUrl}/api/collections`, {
+  const response = await fetch(`${BRIDGE_CONFIG.bridgeUrl}/api/collections/init`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: VECTORAI_CONFIG.collectionName,
+      name: BRIDGE_CONFIG.collectionName,
       dimension: 384, // all-MiniLM-L6-v2 output dimension
-      metadata_schema: {
-        subreddit: 'string',
-        title: 'string',
-        author: 'string',
-        score: 'integer',
-        num_comments: 'integer',
-        created_at_reddit: 'integer',
-        url: 'string',
-      },
     }),
   });
 
-  // Collection might already exist — that's fine
-  if (response.status === 409) return;
   if (!response.ok) {
     throw new Error(`Failed to init collection: ${response.status} ${await response.text()}`);
   }
 }
 
 /**
- * Upsert thread vectors into VectorAI DB.
- * Uses bulk upsert for efficiency.
+ * Upsert thread vectors into VectorAI DB via the bridge.
+ * Uses the actian-vectorai Python client under the hood:
+ *   client.points.upsert(collection, [PointStruct(...), ...])
  */
 export async function upsertThreads(threads: ThreadVectorRecord[]): Promise<void> {
   if (threads.length === 0) return;
 
-  const response = await fetch(
-    `${VECTORAI_CONFIG.baseUrl}/api/collections/${VECTORAI_CONFIG.collectionName}/upsert`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ids: threads.map(t => t.id),
-        vectors: threads.map(t => t.vector),
-        metadata: threads.map(t => ({
-          subreddit: t.subreddit,
-          title: t.title,
-          author: t.author,
-          score: t.score,
-          num_comments: t.numComments,
-          created_at_reddit: t.createdAtReddit,
-          url: t.url,
-        })),
-      }),
-    }
-  );
+  // Upsert in batches of 50 for reliability
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < threads.length; i += BATCH_SIZE) {
+    const batch = threads.slice(i, i + BATCH_SIZE);
 
-  if (!response.ok) {
-    throw new Error(`Upsert failed: ${response.status} ${await response.text()}`);
+    const response = await fetch(
+      `${BRIDGE_CONFIG.bridgeUrl}/api/collections/${BRIDGE_CONFIG.collectionName}/upsert`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ids: batch.map(t => t.id),
+          vectors: batch.map(t => t.vector),
+          metadata: batch.map(t => ({
+            subreddit: t.subreddit,
+            title: t.title,
+            author: t.author,
+            score: t.score,
+            num_comments: t.numComments,
+            created_at_reddit: t.createdAtReddit,
+            url: t.url,
+          })),
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Upsert failed: ${response.status} ${await response.text()}`);
+    }
   }
 }
 
 /**
  * Semantic similarity search in VectorAI DB with metadata filters.
- * This is the "Filtered Search" advanced feature from the hackathon.
+ * Uses the actian-vectorai Python client under the hood:
+ *   client.points.search(collection, vector=..., limit=..., filter=...)
+ *
+ * The bridge converts filter conditions into the VectorAI FilterBuilder DSL.
  */
 export async function semanticSearch(
   options: VectorSearchOptions
@@ -188,7 +193,7 @@ export async function semanticSearch(
   // Embed the query text
   const queryVector = await embedText(queryText);
 
-  // Build metadata filters
+  // Build metadata filters (bridge converts these to VectorAI FilterBuilder)
   const now = Math.floor(Date.now() / 1000);
   const filters: Record<string, any> = {};
 
@@ -215,7 +220,7 @@ export async function semanticSearch(
   }
 
   const response = await fetch(
-    `${VECTORAI_CONFIG.baseUrl}/api/collections/${VECTORAI_CONFIG.collectionName}/search`,
+    `${BRIDGE_CONFIG.bridgeUrl}/api/collections/${BRIDGE_CONFIG.collectionName}/search`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -250,8 +255,6 @@ export async function semanticSearch(
 
 /**
  * Hybrid fusion search — combines semantic similarity with engagement metrics.
- * This is the "Hybrid Fusion" advanced feature from the hackathon.
- *
  * Uses Reciprocal Rank Fusion (RRF) to merge:
  *   - Semantic similarity ranking from VectorAI DB
  *   - Engagement score ranking (comments + upvotes + recency)
@@ -314,13 +317,14 @@ export async function hybridSearch(
 }
 
 /**
- * Delete vectors from VectorAI DB by IDs.
+ * Delete vectors from VectorAI DB by IDs via the bridge.
+ * Uses: client.points.delete(collection, ids)
  */
 export async function deleteThreads(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
 
   const response = await fetch(
-    `${VECTORAI_CONFIG.baseUrl}/api/collections/${VECTORAI_CONFIG.collectionName}/delete`,
+    `${BRIDGE_CONFIG.bridgeUrl}/api/collections/${BRIDGE_CONFIG.collectionName}/delete`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -334,20 +338,46 @@ export async function deleteThreads(ids: string[]): Promise<void> {
 }
 
 /**
- * Get collection stats from VectorAI DB.
+ * Get collection stats from VectorAI DB via the bridge.
+ * Uses: client.points.count(collection)
  */
 export async function getCollectionStats(): Promise<{ count: number; collection: string }> {
   const response = await fetch(
-    `${VECTORAI_CONFIG.baseUrl}/api/collections/${VECTORAI_CONFIG.collectionName}/stats`
+    `${BRIDGE_CONFIG.bridgeUrl}/api/collections/${BRIDGE_CONFIG.collectionName}/stats`
   );
 
   if (!response.ok) {
-    throw new Error(`Stats failed: ${response.status}`);
+    // Collection might not exist yet — return 0
+    return { count: 0, collection: BRIDGE_CONFIG.collectionName };
   }
 
   const data = await response.json();
   return {
     count: data.count || 0,
-    collection: VECTORAI_CONFIG.collectionName,
+    collection: BRIDGE_CONFIG.collectionName,
   };
+}
+
+/**
+ * Check health of the bridge service and VectorAI DB.
+ */
+export async function healthCheck(): Promise<{
+  bridge: boolean;
+  vectoraiDb: boolean;
+  embedding: boolean;
+}> {
+  try {
+    const response = await fetch(`${BRIDGE_CONFIG.bridgeUrl}/api/health`);
+    if (!response.ok) {
+      return { bridge: false, vectoraiDb: false, embedding: false };
+    }
+    const data = await response.json();
+    return {
+      bridge: data.status === 'ok',
+      vectoraiDb: data.vectorai_db?.status === 'connected',
+      embedding: data.embedding?.status === 'loaded',
+    };
+  } catch {
+    return { bridge: false, vectoraiDb: false, embedding: false };
+  }
 }
