@@ -1,5 +1,11 @@
 # Community Reply Assistant
 
+
+## Demo
+
+https://github.com/user-attachments/assets/demo.mp4
+
+> _Generated with [demo-video-generator](https://github.com/zan-maker/demo-video-generator)_
 **Free, open-source tool that helps domain experts provide thoughtful, helpful answers to business questions on Reddit.**
 
 ## The Problem
